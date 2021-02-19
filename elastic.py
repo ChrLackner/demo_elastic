@@ -101,15 +101,21 @@ T.vec.data = aT.mat.Inverse(fesT.FreeDofs()) * fT.vec
 
 Draw(T, mesh, "T")
 
-input("start elastic...")
-
-
 mu = E/2/(1+nu)
 lam = E * nu / ((1+nu) * (1-2*nu))
+
+alpha = 1e-5
+TRef = 0
 
 if nonlinear:
     I = Id(3)
     def Strain(u):
+        Fe = I + Grad(u)
+        Ft = (-alpha * (T-TRef) + 1) * I
+        F = Fe * Ft
+        return 0.5 * (F.trans * F - I)
+
+    def StrainWithoutT(u):
         F = I + Grad(u)
         return 0.5 * (F.trans * F - I)
 
@@ -166,7 +172,7 @@ with TaskManager(10**9):
         # gfu.vec.data = inv * f.vec
         GMRes(a.mat, f.vec, pre, x=gfu.vec,  maxsteps=1000, reltol=1e-8)
     gfustress = GridFunction(fesStress)
-    gfustress.Set(Stress(Strain(gfu)))
+    gfustress.Set(Stress(StrainWithoutT(gfu)))
 
 Draw(gfu, mesh, "displacement")
 # stress = Stress(Strain(gfu))
@@ -179,6 +185,6 @@ Draw(vonMises, mesh, "von_mises")
 
 from ngsolve.internal import *
 visoptions.deformation = 1
-visoptions.scaledeform1 = 1e6
+visoptions.scaledeform1 = 1e2
 visoptions.lineartexture = 1
 # visoptions.scalfunction = "averg_stress:9"
