@@ -4,8 +4,26 @@ from netgen.occ import *
 from ngsolve import *
 from time import time
 from ngsolve.krylovspace import CGSolver, GMRes
+from ngsolve.nonlinearsolvers import NewtonSolver
 
-simpleGeometry = False
+simpleGeometry = True
+nonlinear = True
+
+class MyGMResSolver(BaseMatrix):
+    def __init__(self, a, pre):
+        super().__init__()
+        self.a = a
+        self.pre = pre
+
+    def Height(self):
+        self.a.mat.height
+        
+    def Width(self):
+        self.a.mat.width
+
+    def Mult(self, x, y):
+        y[:] = 0
+        GMRes(self.a.mat, x, self.pre, x=y, printrates=True, reltol=1e-4, maxsteps=1000)
 
 if simpleGeometry:
     def CreateGeometry():
@@ -24,8 +42,8 @@ if simpleGeometry:
 
     mp = meshsize.moderate
     h_edges = 0.01
-    mp.RestrictHLine((1.5, 0, 0.2), (1.5, 0.2, 0.2), h_edges)
-    mp.RestrictH((1.5, 0.8, 0.2), 0.005)
+    # mp.RestrictHLine((1.5, 0, 0.2), (1.5, 0.2, 0.2), h_edges)
+    # mp.RestrictH((1.5, 0.8, 0.2), 0.005)
 
     mesh = Mesh(geo.GenerateMesh(mp, maxh=0.07))
 else:
@@ -61,12 +79,27 @@ else:
 mu = E/2/(1+nu)
 lam = E * nu / ((1+nu) * (1-2*nu))
 
-def Strain(u):
-    return 0.5 * (Grad(u) + Grad(u).trans)
+if nonlinear:
+    I = Id(3)
+    def Strain(u):
+        F = I + Grad(u)
+        return 0.5 * (F.trans * F - I)
 
-I = Id(3)
-def Stress(strain):
-    return 2 * mu * strain + lam * Trace(strain) * I
+    def Stress(strain):
+        C = 2 * strain + I
+        return mu * (I - Det(C)**(-lam/mu) * Inv(C))
+
+    def Energy(strain):
+        C = 2 * strain + I
+        return mu * (Trace(strain) + mu/lam * (Det(C)**(-lam/2/mu)-1))
+
+else:
+    def Strain(u):
+        return 0.5 * (Grad(u) + Grad(u).trans)
+
+    I = Id(3)
+    def Stress(strain):
+        return 2 * mu * strain + lam * Trace(strain) * I
 
 fes = VectorH1(mesh, order=3, dirichlet="bottom") #, wb_withedges=False)
 u, v = fes.TnT()
@@ -74,7 +107,10 @@ fesStress = H1(mesh, order=2)**9
 
 start = time()
 a = BilinearForm(fes)
-a += InnerProduct(Stress(Strain(u)), Strain(v)) * dx
+if nonlinear:
+    a += Variation(Energy(Strain(u)) * dx)
+else:
+    a += InnerProduct(Stress(Strain(u)), Strain(v)) * dx
 print("Biform setup needs", time() - start, "seconds")
 
 pre = Preconditioner(a, type="bddc")
@@ -87,16 +123,20 @@ def Setup():
     a.Assemble()
     f.Assemble()
 
+gfu = GridFunction(fes)
 
 with TaskManager(10**9):
-    Setup()
-    gfu = GridFunction(fes)
-    start = time()
-    # gfu.vec.data = a.mat.Inverse(fes.FreeDofs()) * f.vec
-    # inv = CGSolver(a.mat, pre, tol=1e-8, printing=True, maxsteps=1000)
-    # gfu.vec.data = inv * f.vec
-    GMRes(a.mat, f.vec, pre, x=gfu.vec,  maxsteps=1000, reltol=1e-8)
-    print("Solve problem", time() - start, "seconds")
+    if nonlinear:
+        f.Assemble()
+        lin_solver = MyGMResSolver(a, pre)
+        newton = NewtonSolver(a, gfu, rhs=f, solver=lin_solver)
+        newton.Solve(printing=True, maxerr=1e-8)
+    else:
+        Setup()
+        # gfu.vec.data = a.mat.Inverse(fes.FreeDofs()) * f.vec
+        # inv = CGSolver(a.mat, pre, tol=1e-8, printing=True, maxsteps=1000)
+        # gfu.vec.data = inv * f.vec
+        GMRes(a.mat, f.vec, pre, x=gfu.vec,  maxsteps=1000, reltol=1e-8)
     gfustress = GridFunction(fesStress)
     gfustress.Set(Stress(Strain(gfu)))
 
