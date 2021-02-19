@@ -5,9 +5,12 @@ from ngsolve import *
 from time import time
 from ngsolve.krylovspace import CGSolver, GMRes
 from ngsolve.nonlinearsolvers import NewtonSolver
+from ngsolve.comp import DifferentialSymbol
 
 simpleGeometry = True
 nonlinear = True
+
+thermal_point_source = (0, 0, 0.2)
 
 class MyGMResSolver(BaseMatrix):
     def __init__(self, a, pre):
@@ -37,6 +40,7 @@ if simpleGeometry:
         geo.Add(plate.mat("steel"))
         geo.Add(left.mat("steel"), bcmod=[(top, "left")])
         geo.Add(right.mat("steel"), bcmod=[(top, "right")])
+        geo.AddPoint(thermal_point_source, "thermal_source")
         return geo
     geo = CreateGeometry()
 
@@ -75,6 +79,30 @@ if simpleGeometry:
 else:
     load = mesh.BoundaryCF({ "left" : (0, 0, 1),
                              "right" : (0, 0, -1) }) * 1000
+
+
+fesT = H1(mesh, order=3, dirichlet="bottom")
+uT, vT = fesT.TnT()
+
+
+
+aT = BilinearForm(fesT)
+aT += 25 * grad(uT) * grad(vT) * dx
+
+dp = DifferentialSymbol(BBBND)
+fT = LinearForm(fesT)
+fT += 200 * vT * dp("thermal_source")
+
+aT.Assemble()
+fT.Assemble()
+
+T = GridFunction(fesT)
+T.vec.data = aT.mat.Inverse(fesT.FreeDofs()) * fT.vec
+
+Draw(T, mesh, "T")
+
+input("start elastic...")
+
 
 mu = E/2/(1+nu)
 lam = E * nu / ((1+nu) * (1-2*nu))
