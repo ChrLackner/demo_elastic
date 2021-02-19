@@ -1,38 +1,62 @@
 
 from netgen.csg import *
+from netgen.occ import *
 from ngsolve import *
 from time import time
 from ngsolve.krylovspace import CGSolver, GMRes
 
-def CreateGeometry():
-    geo = CSGeometry()
-    bottom = Plane((0,0,0), (0,0,-1)).bc("bottom")
-    plate_larger = OrthoBrick((0,0,-1), (2, 1, 0.2))
-    plate = plate_larger * bottom
-    top = Plane((0,0,1), (0,0,1))
-    left = OrthoBrick((1.5, 0, 0.2), (1.7, 0.2, 2)) * top
-    right = OrthoBrick((1.5, 0.8, 0.2), (1.7, 1, 2)) * top
-    geo.Add(plate.mat("steel"))
-    geo.Add(left.mat("steel"), bcmod=[(top, "left")])
-    geo.Add(right.mat("steel"), bcmod=[(top, "right")])
-    return geo
+simpleGeometry = False
 
-geo = CreateGeometry()
+if simpleGeometry:
+    def CreateGeometry():
+        geo = CSGeometry()
+        bottom = Plane((0,0,0), (0,0,-1)).bc("bottom")
+        plate_larger = OrthoBrick((0,0,-1), (2, 1, 0.2))
+        plate = plate_larger * bottom
+        top = Plane((0,0,1), (0,0,1))
+        left = OrthoBrick((1.5, 0, 0.2), (1.7, 0.2, 2)) * top
+        right = OrthoBrick((1.5, 0.8, 0.2), (1.7, 1, 2)) * top
+        geo.Add(plate.mat("steel"))
+        geo.Add(left.mat("steel"), bcmod=[(top, "left")])
+        geo.Add(right.mat("steel"), bcmod=[(top, "right")])
+        return geo
+    geo = CreateGeometry()
 
-mp = meshsize.moderate
-h_edges = 0.01
-mp.RestrictHLine((1.5, 0, 0.2), (1.5, 0.2, 0.2), h_edges)
-mp.RestrictH((1.5, 0.8, 0.2), 0.005)
+    mp = meshsize.moderate
+    h_edges = 0.01
+    mp.RestrictHLine((1.5, 0, 0.2), (1.5, 0.2, 0.2), h_edges)
+    mp.RestrictH((1.5, 0.8, 0.2), 0.005)
 
-mesh = Mesh(geo.GenerateMesh(mp, maxh=0.07))
+    mesh = Mesh(geo.GenerateMesh(mp, maxh=0.07))
+else:
+    geo = OCCGeometry("frame.step")
+    import os
+    meshfile = "frame.vol.gz"
 
+    if os.path.exists(meshfile):
+        mesh = Mesh(meshfile)
+        mesh.ngmesh.SetGeometry(geo)
+    else:
+        netgen_mesh = geo.GenerateMesh(meshsize.moderate)
+        netgen_mesh.SetBCName(60, "right")
+        netgen_mesh.SetBCName(83, "left")
+        netgen_mesh.SetBCName(0, "bottom")
+        netgen_mesh.SetMaterial(1, "steel")
+        netgen_mesh.Save(meshfile)
+        mesh = Mesh(netgen_mesh)
+
+    mesh.Curve(4)
 Draw(mesh)
 
 E = 210e9
 nu = 0.2
 
-load = mesh.BoundaryCF({ "left" : (1, 0, 0),
-                         "right" : (-1, 0, 0) }) * 1000
+if simpleGeometry:
+    load = mesh.BoundaryCF({ "left" : (1, 0, 0),
+                             "right" : (-1, 0, 0) }) * 1000
+else:
+    load = mesh.BoundaryCF({ "left" : (0, 0, 1),
+                             "right" : (0, 0, -1) }) * 1000
 
 mu = E/2/(1+nu)
 lam = E * nu / ((1+nu) * (1-2*nu))
