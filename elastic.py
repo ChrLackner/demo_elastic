@@ -1,6 +1,8 @@
 
 from netgen.csg import *
 from ngsolve import *
+from time import time
+from ngsolve.krylovspace import CGSolver, GMRes
 
 def CreateGeometry():
     geo = CSGeometry()
@@ -42,24 +44,37 @@ I = Id(3)
 def Stress(strain):
     return 2 * mu * strain + lam * Trace(strain) * I
 
-fes = VectorH1(mesh, order=3, dirichlet="bottom")
+fes = VectorH1(mesh, order=3, dirichlet="bottom") #, wb_withedges=False)
 u, v = fes.TnT()
 fesStress = H1(mesh, order=2)**9
 
+start = time()
 a = BilinearForm(fes)
 a += InnerProduct(Stress(Strain(u)), Strain(v)) * dx
+print("Biform setup needs", time() - start, "seconds")
+
+pre = Preconditioner(a, type="bddc")
 
 f = LinearForm(fes)
 f += load * v * ds("left|right")
 
-a.Assemble()
-f.Assemble()
+@TimeFunction
+def Setup():
+    a.Assemble()
+    f.Assemble()
 
-gfu = GridFunction(fes)
-gfu.vec.data = a.mat.Inverse(fes.FreeDofs()) * f.vec
 
-gfustress = GridFunction(fesStress)
-gfustress.Set(Stress(Strain(gfu)))
+with TaskManager(10**9):
+    Setup()
+    gfu = GridFunction(fes)
+    start = time()
+    # gfu.vec.data = a.mat.Inverse(fes.FreeDofs()) * f.vec
+    # inv = CGSolver(a.mat, pre, tol=1e-8, printing=True, maxsteps=1000)
+    # gfu.vec.data = inv * f.vec
+    GMRes(a.mat, f.vec, pre, x=gfu.vec,  maxsteps=1000, reltol=1e-8)
+    print("Solve problem", time() - start, "seconds")
+    gfustress = GridFunction(fesStress)
+    gfustress.Set(Stress(Strain(gfu)))
 
 Draw(gfu, mesh, "displacement")
 # stress = Stress(Strain(gfu))
